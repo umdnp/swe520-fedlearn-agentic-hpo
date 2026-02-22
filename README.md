@@ -1,4 +1,4 @@
-# SWE 520 Capstone Project - Agent-based HPO for Federated Learning
+# SWE 520 Capstone Project - Agentic HPO for Federated Learning
 
 This capstone project builds on prior work comparing centralized and federated learning, shifting the focus
 to a more realistic federated setting where data cannot be centrally inspected or interactively explored.
