@@ -1,0 +1,6 @@
+[superlink]
+default = "local-simulation"
+
+# how many simulated clients
+[superlink.local-simulation]
+options.num-supernodes = 3
