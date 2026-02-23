@@ -85,7 +85,7 @@ ANNOTATION_CONFIG: dict[str, dict[str, Any]] = {
             "pacu": "PACU",
             "recovery room": "Recovery Room",
             "step-down unit (sdu)": "Step-Down Unit (SDU)",
-            "Other": "Other",
+            "other": "Other",
         },
     },
     "numbedscategory": {
@@ -123,7 +123,7 @@ ANNOTATION_CONFIG: dict[str, dict[str, Any]] = {
             "pacu": "PACU",
             "recovery room": "Recovery Room",
             "step-down unit (sdu)": "Step-Down Unit (SDU)",
-            "Other": "Other",
+            "other": "Other",
         },
     },
     "unittype": {
