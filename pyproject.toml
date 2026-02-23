@@ -1,0 +1,41 @@
+[project]
+name = "agentic-hpo-fl"
+description = "SWE 520 Capstone - Agent-based HPO for Federated Learning"
+version = "0.1.0"
+requires-python = ">=3.12,<4.0"
+authors = [{ name = "Jim Prantzalos" }]
+readme = "README.md"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["agentic_hpo"]
+
+[tool.flwr.app]
+publisher = "umich"
+name = "swe520capstone-agentic-hpo"
+
+[tool.flwr.app.components]
+clientapp = "agentic_hpo.federated.client_app:app"
+serverapp = "agentic_hpo.federated.server_app:app"
+
+[tool.flwr.app.config]
+# baseline | static_hpo | agent_hpo
+experiment = "baseline"
+
+# server_app settings
+num-server-rounds = 5
+penalty = "l2"
+local-epochs = 1
+fraction-train = 1.0
+fraction-evaluate = 1.0
+
+[tool.flwr.federations]
+default = "local-simulation"
+
+[tool.flwr.federations.local-simulation]
+# how many simulated clients (SuperNodes)
+options.num-supernodes = 3
