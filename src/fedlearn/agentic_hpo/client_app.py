@@ -85,7 +85,7 @@ def _load_client_data(context: Context) -> pd.DataFrame:
 
         where_sql = " OR ".join(where_clauses) if where_clauses else "TRUE"
 
-        query = f"SELECT * FROM {VIEW_NAME} WHERE {where_sql}"
+        query = f"SELECT * FROM {VIEW_NAME} WHERE {where_sql} ORDER BY patientunitstayid"
 
         df = conn.execute(query, params).df()
     finally:
