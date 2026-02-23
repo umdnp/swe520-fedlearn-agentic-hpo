@@ -209,6 +209,5 @@ __marimo__/
 # Intelli
 .idea/
 
-# Data files - too large for git
-data/
-
+# eICU-CRD Database - DO NOT DISTRIBUTE
+data/duckdb/fedlearn.duckdb
