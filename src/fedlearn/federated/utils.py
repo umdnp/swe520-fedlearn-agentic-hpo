@@ -65,14 +65,20 @@ def get_preprocessor_feature_names() -> np.ndarray:
 
     return np.array(feature_names, dtype=object)
 
-
-def get_model(penalty: str, local_epochs: int) -> Pipeline:
+def get_model(
+        penalty: str,
+        local_epochs: int,
+        class_weight=None,
+        sgd_learning_rate: str = "optimal",
+        sgd_eta0: float = 0.0,
+) -> Pipeline:
     """
     Create the global sklearn model to be trained federatedly.
 
     Args:
         penalty: Regularization type for SGDClassifier ("l2", "l1", "elasticnet", or "none").
         local_epochs: Number of passes over the LOCAL data per round (max_iter).
+        class_weight: Class weight strategy for SGDClassifier ("balanced" or None).
 
     Returns:
         A Pipeline(preprocessor -> SGDClassifier).
@@ -83,8 +89,9 @@ def get_model(penalty: str, local_epochs: int) -> Pipeline:
         loss="log_loss",  # logistic regression-style
         penalty=penalty,
         max_iter=local_epochs,  # how many epochs each client runs per round
-        learning_rate="optimal",
-        class_weight="balanced",
+        learning_rate=sgd_learning_rate,
+        eta0=sgd_eta0,
+        class_weight=class_weight,
         n_jobs=-1,
         random_state=42,
         warm_start=True,

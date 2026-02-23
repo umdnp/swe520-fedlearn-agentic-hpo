@@ -27,10 +27,14 @@ serverapp = "fedlearn.agentic_hpo.server_app:app"
 # baseline | static_hpo | agent_hpo
 experiment = "baseline"
 
-# server_app settings
-num-server-rounds = 5
+# shared settings
+num-server-rounds = 3
 local-epochs = 3
 penalty = "l2"
+class-weight = "none"
+sgd-learning-rate = "constant"
+sgd-eta0 = 0.001
+
+# server_app settings
 fraction-train = 1.0
 fraction-evaluate = 1.0
-

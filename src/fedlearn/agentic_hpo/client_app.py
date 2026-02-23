@@ -134,11 +134,21 @@ def _init_model(message: Message, context: Context):
     Build model and load incoming parameters.
     """
     incoming_arrays = message.content["arrays"]
-    penalty = context.run_config["penalty"]
     local_epochs = context.run_config["local-epochs"]
+    penalty = context.run_config["penalty"]
+    class_weight_cfg = str(context.run_config.get("class-weight", "none")).lower()
+    class_weight = "balanced" if class_weight_cfg == "balanced" else None
+    sgd_learning_rate = str(context.run_config.get("sgd-learning-rate", "optimal"))
+    sgd_eta0 = float(context.run_config.get("sgd-eta0", 0.0))
 
     # create model from run_config and load incoming flwr params
-    model = get_model(penalty=penalty, local_epochs=local_epochs)
+    model = get_model(
+        penalty=penalty,
+        local_epochs=local_epochs,
+        class_weight=class_weight,
+        sgd_learning_rate=sgd_learning_rate,
+        sgd_eta0=sgd_eta0,
+    )
     set_model_params(model, incoming_arrays.to_numpy_ndarrays())
     return model
 
@@ -149,15 +159,15 @@ def train(message: Message, context: Context) -> Message:
     Perform one round of local training for this client.
 
     Steps:
-      1) Load global model parameters from the server.
-      2) Initialize the local model with those parameters.
-      3) Load this client's local train/eval data.
+      1) Load this client's local train/eval data.
+      2) Load global model parameters from the server.
+      3) Initialize the local model with those parameters.
       4) Train for `local-epochs` on the local training data.
-      5) Compute metrics on the local eval data.
+      5) Compute metrics on the local training data.
       6) Return updated parameters and metrics to the server.
     """
     # load local train/eval data for this client
-    X_train, y_train, X_eval, y_eval = _get_train_eval_data(context)
+    X_train, y_train, _, _ = _get_train_eval_data(context)
 
     # initialize model from server message
     model = _init_model(message, context)
@@ -165,14 +175,14 @@ def train(message: Message, context: Context) -> Message:
     # local training
     model.fit(X_train, y_train)
 
-    # compute metrics on eval split
-    y_pred = model.predict(X_eval)
-    acc = float(accuracy_score(y_eval, y_pred))
+    # compute metrics on train split
+    y_pred = model.predict(X_train)
+    acc = float(accuracy_score(y_train, y_pred))
 
     log_loss_failed = 0.0
     try:
-        y_proba = model.predict_proba(X_eval)
-        loss = float(log_loss(y_eval, y_proba, labels=model.classes_))
+        y_proba = model.predict_proba(X_train)
+        loss = float(log_loss(y_train, y_proba, labels=model.classes_))
     except ValueError:
         loss = float("nan")
         log_loss_failed = 1.0
@@ -215,6 +225,7 @@ def evaluate(message: Message, context: Context) -> Message:
 
     # initialize model from server message
     model = _init_model(message, context)
+
 
     # compute metrics
     y_pred = model.predict(X_eval)

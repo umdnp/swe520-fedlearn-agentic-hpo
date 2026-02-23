@@ -30,17 +30,27 @@ def main(grid: Grid, context: Context) -> None:
 
     # read run config from pyproject.toml or cli
     num_rounds: int = context.run_config["num-server-rounds"]
-    penalty: str = context.run_config["penalty"]
     local_epochs: int = context.run_config["local-epochs"]
-
-    fraction_train: float = context.run_config.get("fraction-train", 1.0)
-    fraction_evaluate: float = context.run_config.get("fraction-evaluate", 1.0)
+    penalty: str = context.run_config["penalty"]
+    class_weight_cfg = str(context.run_config.get("class-weight", "none")).lower()
+    class_weight = "balanced" if class_weight_cfg == "balanced" else None
+    sgd_learning_rate = str(context.run_config.get("sgd-learning-rate", "optimal"))
+    sgd_eta0 = float(context.run_config.get("sgd-eta0", 0.0))
 
     # create and initialize model
-    model = get_model(penalty=penalty, local_epochs=local_epochs)
+    model = get_model(
+        penalty=penalty,
+        local_epochs=local_epochs,
+        class_weight=class_weight,
+        sgd_learning_rate=sgd_learning_rate,
+        sgd_eta0=sgd_eta0,
+    )
     set_initial_params(model)
 
     arrays = ArrayRecord(get_model_params(model))
+
+    fraction_train: float = context.run_config.get("fraction-train", 1.0)
+    fraction_evaluate: float = context.run_config.get("fraction-evaluate", 1.0)
 
     # initialize FedAvg strategy
     strategy = FedAvg(
