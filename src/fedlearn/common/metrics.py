@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
+from sklearn.exceptions import NotFittedError
 from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
+
+from fedlearn.common.model import CLASSES
 
 
 def compute_binary_metrics(model, X, y) -> dict[str, float]:
@@ -11,11 +14,19 @@ def compute_binary_metrics(model, X, y) -> dict[str, float]:
     y_pred = model.predict(X)
     acc = float(accuracy_score(y, y_pred))
 
+    labels = getattr(model, "classes_", None)
+    if labels is None and hasattr(model, "named_steps"):
+        clf = model.named_steps.get("classifier")
+        labels = getattr(clf, "classes_", None)
+
+    if labels is None:
+        labels = CLASSES
+
     log_loss_failed = 0.0
     try:
         y_proba = model.predict_proba(X)
-        loss = float(log_loss(y, y_proba, labels=model.classes_))
-    except ValueError:
+        loss = float(log_loss(y, y_proba, labels=labels))
+    except (ValueError, AttributeError, NotFittedError):
         loss = float("nan")
         log_loss_failed = 1.0
 
