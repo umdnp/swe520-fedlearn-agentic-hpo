@@ -44,10 +44,10 @@ def main(grid: Grid, context: Context) -> None:
     # make sure "configs" dir exists
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    runner_name = str(context.run_config.get("runner", "baseline"))
-    factory = RUNNERS.get(runner_name)
+    experiment = str(context.run_config.get("experiment", "baseline"))
+    factory = RUNNERS.get(experiment)
     if factory is None:
-        raise ValueError(f"Unknown experiment {runner_name!r}. Valid: {sorted(RUNNERS)}")
+        raise ValueError(f"Unknown experiment {experiment!r}. Valid: {sorted(RUNNERS)}")
 
     runner = factory()
     result, model = runner.run(grid=grid, context=context)
@@ -56,6 +56,6 @@ def main(grid: Grid, context: Context) -> None:
     final_params = result.arrays.to_numpy_ndarrays()
     set_model_params(model, final_params)
 
-    save_file = CONFIG_DIR / f"{runner_name}.pkl"
+    save_file = CONFIG_DIR / f"{experiment}.pkl"
     logger.info("Saving final model to %s", save_file)
     joblib.dump(model, save_file)
