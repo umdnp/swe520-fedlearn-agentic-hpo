@@ -89,11 +89,11 @@ def get_model(
         loss="log_loss",
         penalty=penalty,
         max_iter=local_epochs,  # how many epochs each client runs per round
+        tol=None,
         learning_rate=sgd_learning_rate,
         class_weight=class_weight,
         n_jobs=-1,
         random_state=42,
-        warm_start=True,
     )
 
     if sgd_eta0 is not None and float(sgd_eta0) > 0.0:
