@@ -71,10 +71,10 @@ class AgenticHPOController:
     def __post_init__(self) -> None:
         # if no key configured, allow FL to run (seed-only behavior)
         self._enabled = bool(os.environ.get("OPENAI_API_KEY", "").strip())
-
-        logger.info("Agent enabled: %s", self._enabled)
-
-        if not self._enabled:
+        if self._enabled:
+            logger.info("Agent enabled (OPENAI_API_KEY found)")
+        else:
+            logger.warning("Agent disabled (OPENAI_API_KEY missing); using base_hp only")
             return
 
         self._agent = Agent(
