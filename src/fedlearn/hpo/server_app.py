@@ -30,7 +30,7 @@ CONFIG_DIR = PROJECT_ROOT / "configs"
 RUNNERS: dict[str, ExperimentRunner] = {
     "baseline": BaselineRunner(),
     "static_hpo": StaticHPORunner(),
-    "hpo": AgenticHPORunner(),
+    "agentic_hpo": AgenticHPORunner(),
 }
 
 
