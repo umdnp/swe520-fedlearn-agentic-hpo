@@ -33,8 +33,14 @@ local-epochs = 3
 penalty = "l2"
 class-weight = "none"
 sgd-learning-rate = "optimal"
-#sgd-eta0 = 0.001 # only useful when learning-rate=constant|adaptive
+#sgd-eta0 = 0.001  # only useful when learning-rate=constant|adaptive
 
 # server_app settings
 fraction-train = 1.0
 fraction-evaluate = 1.0
+
+# hpo controls
+hpo-n-trials = 15
+hpo-num-rounds = 2
+hpo-metric = "roc_auc"  # or "loss"
+hpo-direction = "maximize"  # "maximize" for roc_auc, "minimize" for loss
