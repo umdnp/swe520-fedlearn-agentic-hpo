@@ -20,8 +20,8 @@ publisher = "umich"
 name = "swe520capstone-agentic-hpo"
 
 [tool.flwr.app.components]
-clientapp = "fedlearn.agentic_hpo.client_app:app"
-serverapp = "fedlearn.agentic_hpo.server_app:app"
+clientapp = "fedlearn.hpo.client_app:app"
+serverapp = "fedlearn.hpo.server_app:app"
 
 [tool.flwr.app.config]
 # baseline | static_hpo | hpo
