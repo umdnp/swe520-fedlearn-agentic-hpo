@@ -116,7 +116,7 @@ def set_initial_params(pipeline: Pipeline) -> None:
 
     Uses:
       - N_FEATURES: preprocessed feature dimension
-      - CLASSES:    label set (e.g. [0, 1])
+      - CLASSES: label set ([0, 1])
       - INIT_INTERCEPT: initial intercept vector (usually zeros)
     """
     clf: SGDClassifier = pipeline.named_steps["classifier"]

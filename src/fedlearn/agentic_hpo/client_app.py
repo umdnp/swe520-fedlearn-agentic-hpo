@@ -8,7 +8,7 @@ import pandas as pd
 from flwr.app import Context
 from flwr.clientapp import ClientApp
 from flwr.common import Message, RecordDict, ArrayRecord, MetricRecord
-from sklearn.metrics import accuracy_score, log_loss
+from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from fedlearn.common.annotation import annotate_categorical_columns
@@ -153,6 +153,36 @@ def _init_model(message: Message, context: Context):
     return model
 
 
+def _compute_roc_auc(y_true, model, X) -> tuple[float, float]:
+    """
+    Compute ROC-AUC safely for binary classification.
+
+    Returns:
+        (roc_auc, failed_flag). If the score cannot be computed, a fallback value of (0.5, 1.0) is returned.
+    """
+    # AUC requires both classes
+    if len(np.unique(y_true)) < 2:
+        return 0.5, 1.0
+
+    # try probability scores first
+    if hasattr(model, "predict_proba"):
+        try:
+            y_score = model.predict_proba(X)[:, 1]
+            return float(roc_auc_score(y_true, y_score)), 0.0
+        except ValueError:
+            pass
+
+    # fallback to decision scores
+    if hasattr(model, "decision_function"):
+        try:
+            y_score = model.decision_function(X)
+            return float(roc_auc_score(y_true, y_score)), 0.0
+        except ValueError:
+            pass
+
+    return 0.5, 1.0
+
+
 @app.train()
 def train(message: Message, context: Context) -> Message:
     """
@@ -188,11 +218,14 @@ def train(message: Message, context: Context) -> Message:
         log_loss_failed = 1.0
 
     num_examples = float(len(X_train))
+    roc_auc, roc_auc_failed = _compute_roc_auc(y_train, model, X_train)
 
     metrics = MetricRecord({
         "accuracy": acc,
         "loss": loss,
+        "roc_auc": roc_auc,
         "log-loss-failed": log_loss_failed,
+        "roc-auc-failed": roc_auc_failed,
         "num-examples": num_examples,
     })
 
@@ -226,7 +259,6 @@ def evaluate(message: Message, context: Context) -> Message:
     # initialize model from server message
     model = _init_model(message, context)
 
-
     # compute metrics
     y_pred = model.predict(X_eval)
     acc = float(accuracy_score(y_eval, y_pred))
@@ -240,11 +272,14 @@ def evaluate(message: Message, context: Context) -> Message:
         log_loss_failed = 1.0
 
     num_examples = float(len(X_eval))
+    roc_auc, roc_auc_failed = _compute_roc_auc(y_eval, model, X_eval)
 
     metrics = MetricRecord({
         "accuracy": acc,
         "loss": loss,
+        "roc_auc": roc_auc,
         "log-loss-failed": log_loss_failed,
+        "roc-auc-failed": roc_auc_failed,
         "num-examples": num_examples,
     })
 
