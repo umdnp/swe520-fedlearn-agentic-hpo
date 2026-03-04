@@ -28,7 +28,7 @@ serverapp = "fedlearn.hpo.server_app:app"
 experiment = "baseline"
 
 # shared settings
-num-server-rounds = 20
+num-server-rounds = 3
 local-epochs = 3
 penalty = "l2"
 class-weight = "none"
