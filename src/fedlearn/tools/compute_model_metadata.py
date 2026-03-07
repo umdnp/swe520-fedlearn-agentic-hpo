@@ -2,11 +2,13 @@
 Compute model metadata and save the fitted preprocessor.
 
 This script:
-  - Loads data from DuckDB
-  - Applies the same preprocessing as the centralized model
+  - Reconstructs the federated client partitions
+  - Applies the same 80/20 local split used during FL
+  - Unions all client-local training splits
+  - Fits the shared preprocessor ONLY on that union
   - Computes:
       - n_features (after preprocessing)
-      - classes (unique values of prolonged_stay)
+      - classes (unique values of prolonged_stay from training data)
       - intercept (zero vector of length n_classes)
   - Saves:
       - configs/model_meta.json
@@ -19,23 +21,15 @@ Run:
 import json
 from pathlib import Path
 
-import duckdb
 import joblib
 import numpy as np
 
-from fedlearn.common.annotation import annotate_categorical_columns
+from fedlearn.common.data_split import get_client_train_union
 from fedlearn.common.preprocessing import build_preprocessor
 
 # Constants
 
-SOURCE_TABLE = "v_features_icu_stay_clean"
-DROP_COLS = ["patientunitstayid", "los_days", "prolonged_stay", "apacheadmissiondx"]
-
-# number of rows to sample for computing feature dimension
-SAMPLE_ROWS = 50000
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DUCKDB_PATH = PROJECT_ROOT / "data" / "duckdb" / "fedlearn.duckdb"
 
 CONFIG_DIR = PROJECT_ROOT / "configs"
 META_PATH = CONFIG_DIR / "model_meta.json"
@@ -48,37 +42,22 @@ def main():
         print(f"Config directory '{CONFIG_DIR}' does not exist, creating it ...")
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Connecting to DuckDB ...")
-    conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+    print("Loading union of federated client training data ...")
+    X_train, y_train = get_client_train_union()
 
-    print(f"Loading up to {SAMPLE_ROWS} rows from {SOURCE_TABLE}")
-    df = conn.execute(f"SELECT * FROM {SOURCE_TABLE} LIMIT {SAMPLE_ROWS}").df()
-    conn.close()
+    print(f"count = {len(X_train):,}")
 
-    # normalize missing values
-    df = df.where(df.notna(), np.nan)
-
-    # extract target and features
-    if "prolonged_stay" not in df.columns:
-        raise RuntimeError("Column 'prolonged_stay' not found in dataframe")
-
-    y = df["prolonged_stay"].to_numpy()
-    X = df.drop(columns=DROP_COLS)
-
-    # build and fit preprocessor
     print("Fitting preprocessing pipeline ...")
-    X = annotate_categorical_columns(X)
     preprocessor = build_preprocessor()
-    preprocessor.fit(X)
+    preprocessor.fit(X_train)
 
-    # transform data to compute feature dimension
-    print("Transforming data ...")
-    X_proc = preprocessor.transform(X)
+    print("Transforming training data to compute feature dimension ...")
+    X_proc = preprocessor.transform(X_train)
     n_features = X_proc.shape[1]
 
     # compute classes from y
-    classes = np.unique(y)
-    classes_list = [int(c) for c in classes]  # JSON-friendly
+    classes = np.unique(y_train)
+    classes_list = [int(c) for c in classes]
 
     # create initial intercept as zeros, one per class
     intercept = [0.0] * len(classes_list)
