@@ -57,7 +57,7 @@ def load_client_partition(client_key: str) -> pd.DataFrame:
         include_null = None in regions
         real_regions = [r for r in regions if r is not None]
 
-        where_clauses = []
+        where_clauses: list[str] = []
         params: list[str] = []
 
         if real_regions:
