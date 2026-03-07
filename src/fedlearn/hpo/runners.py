@@ -10,9 +10,10 @@ from flwr.serverapp import Grid
 from flwr.serverapp.strategy import FedAvg, Result, Strategy
 from sklearn.pipeline import Pipeline
 
+from fedlearn.common.config import HP_LOCAL_EPOCHS, HP_PENALTY, HP_LR_SCHEDULE, HP_ETA0, PHASE_HPO_TRIAL
 from fedlearn.common.config import HParams, ServerSettings, get_server_settings
 from fedlearn.common.model import get_model, get_model_params, set_initial_params
-from fedlearn.hpo.agents import AgenticHPOController, AgenticFedAvg
+from fedlearn.hpo.agents import AgenticFedAvg, AgenticHPOController
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +63,17 @@ class BaselineRunner:
             fraction_evaluate=settings.fraction_evaluate,
         )
 
-        # baseline clients use run_config (no config record sent)
-        return _run_fl(strategy=strategy, grid=grid, hp=base_hp, settings=settings)
+        # send final phase so baseline is evaluated on the same final protocol
+        baseline_cfg = base_hp.to_config()
+
+        return _run_fl(
+            strategy=strategy,
+            grid=grid,
+            hp=base_hp,
+            settings=settings,
+            train_cfg=baseline_cfg,
+            eval_cfg=baseline_cfg,
+        )
 
 
 class StaticHPORunner:
@@ -85,14 +95,14 @@ class StaticHPORunner:
 
     @staticmethod
     def _suggest_hparams(trial: optuna.trial.BaseTrial, base: HParams) -> HParams:
-        local_epochs = trial.suggest_int("local-epochs", 1, 10)
-        penalty = trial.suggest_categorical("penalty", ["l2", "l1", "elasticnet"])
+        local_epochs = trial.suggest_int(HP_LOCAL_EPOCHS, 1, 10)
+        penalty = trial.suggest_categorical(HP_PENALTY, ["l2", "l1", "elasticnet"])
         lr_sched = trial.suggest_categorical(
-            "sgd-learning-rate", ["optimal", "constant", "adaptive"]
+            HP_LR_SCHEDULE, ["optimal", "constant", "adaptive"]
         )
 
         eta0 = (
-            float(trial.suggest_float("sgd-eta0", 1e-4, 1e-1, log=True))
+            float(trial.suggest_float(HP_ETA0, 1e-4, 1e-1, log=True))
             if lr_sched in ("constant", "adaptive")
             else 0.0
         )
@@ -106,6 +116,9 @@ class StaticHPORunner:
         )
 
     def run(self, grid: Grid, context: Context) -> tuple[Result, Pipeline]:
+        """
+        Run Optuna-based static HPO with trial-time validation and final test evaluation.
+        """
         settings = get_server_settings(context)
         base_hp = HParams.from_run_config(context)
 
@@ -123,7 +136,7 @@ class StaticHPORunner:
 
         def objective(trial: optuna.Trial) -> float:
             hp_trial = self._suggest_hparams(trial, base_hp)
-            cfg_trial = hp_trial.to_config()
+            cfg_trial = hp_trial.to_config(PHASE_HPO_TRIAL)
 
             trial_strategy = FedAvg(
                 fraction_train=settings.fraction_train,
@@ -158,7 +171,7 @@ class StaticHPORunner:
             fraction_evaluate=settings.fraction_evaluate,
         )
 
-        # full run using best static config
+        # full run using the best static config on the final phase
         return _run_fl(
             strategy=final_strategy,
             grid=grid,
@@ -193,6 +206,6 @@ class AgenticHPORunner:
             grid=grid,
             hp=seed_hp,
             settings=settings,
-            train_cfg=seed_cfg,  # initial seed sent
+            train_cfg=seed_cfg,  # initial seed config sent to clients
             eval_cfg=seed_cfg,
         )

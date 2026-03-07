@@ -3,7 +3,7 @@ Compute model metadata and save the fitted preprocessor.
 
 This script:
   - Reconstructs the federated client partitions
-  - Applies the same 80/20 local split used during FL
+  - Applies the same 60/20/20 train/val/test per client
   - Unions all client-local training splits
   - Fits the shared preprocessor ONLY on that union
   - Computes:

@@ -32,7 +32,8 @@ CLIENT_REGION_MAP: dict[str, list[str | None]] = {
 CLIENT_KEYS = ("client_midwest", "client_south", "client_other")
 
 SPLIT_RANDOM_STATE = 42
-EVAL_SIZE = 0.2
+TEST_SIZE = 0.2
+VAL_SIZE_WITHIN_TRAINVAL = 0.25  # 0.25 of remaining 80% => 20% overall
 
 
 def load_client_partition(client_key: str) -> pd.DataFrame:
@@ -86,9 +87,13 @@ def load_client_partition(client_key: str) -> pd.DataFrame:
     return df
 
 
-def _split_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+def _split_xy(df: pd.DataFrame) -> tuple[
+    pd.DataFrame, pd.Series,
+    pd.DataFrame, pd.Series,
+    pd.DataFrame, pd.Series,
+]:
     """
-    Apply the exact same feature selection and 80/20 split used by clients.
+    Split one client partition into train/val/test (60/20/20).
     """
     if df.empty:
         raise RuntimeError("No rows found for partition")
@@ -102,33 +107,49 @@ def _split_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, 
 
     X = df[feat_cols]
 
-    X_train, X_eval, y_train, y_eval = train_test_split(
+    stratify_y = y if y.nunique() > 1 else None
+
+    X_trainval, X_test, y_trainval, y_test = train_test_split(
         X,
         y,
-        test_size=EVAL_SIZE,
+        test_size=TEST_SIZE,
         random_state=SPLIT_RANDOM_STATE,
-        stratify=y if y.nunique() > 1 else None,
+        stratify=stratify_y,
     )
 
-    return X_train, y_train, X_eval, y_eval
+    stratify_y_trainval = y_trainval if y_trainval.nunique() > 1 else None
+
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_trainval,
+        y_trainval,
+        test_size=VAL_SIZE_WITHIN_TRAINVAL,
+        random_state=SPLIT_RANDOM_STATE,
+        stratify=stratify_y_trainval,
+    )
+
+    return X_train, y_train, X_val, y_val, X_test, y_test
 
 
-def get_client_train_eval_by_key(client_key: str) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+def get_client_train_val_test_by_key(client_key: str) -> tuple[
+    pd.DataFrame, pd.Series,
+    pd.DataFrame, pd.Series,
+    pd.DataFrame, pd.Series,
+]:
     """
-    Return local train/eval split for one logical client.
+    Return local train/val/test split for one logical client.
     """
     return _split_xy(load_client_partition(client_key))
 
 
 def get_client_train_union() -> tuple[pd.DataFrame, pd.Series]:
     """
-    Union all client-local training splits into one shared training set.
+    Union all client-local training splits into one shared training set (used for fitting shared preprocessor).
     """
     X_parts: list[pd.DataFrame] = []
     y_parts: list[pd.Series] = []
 
     for client_key in CLIENT_KEYS:
-        X_train, y_train, _, _ = get_client_train_eval_by_key(client_key)
+        X_train, y_train, _, _, _, _ = get_client_train_val_test_by_key(client_key)
         X_parts.append(X_train)
         y_parts.append(y_train)
 

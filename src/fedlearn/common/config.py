@@ -11,6 +11,10 @@ HP_CLASS_WEIGHT = "class-weight"
 HP_LR_SCHEDULE = "sgd-learning-rate"
 HP_ETA0 = "sgd-eta0"
 
+PHASE_PARAM = "phase"
+PHASE_HPO_TRIAL = "hpo-trial"
+PHASE_FINAL = "final"
+
 
 @dataclass(frozen=True)
 class HParams:
@@ -29,16 +33,15 @@ class HParams:
         sched = self.sgd_learning_rate
         return self.sgd_eta0_cfg if sched in ("constant", "adaptive") else 0.0
 
-    def to_config(self) -> ConfigRecord:
-        return ConfigRecord(
-            {
-                HP_LOCAL_EPOCHS: int(self.local_epochs),
-                HP_PENALTY: str(self.penalty),
-                HP_CLASS_WEIGHT: str(self.class_weight_cfg),
-                HP_LR_SCHEDULE: str(self.sgd_learning_rate),
-                HP_ETA0: float(self.sgd_eta0_cfg),
-            }
-        )
+    def to_config(self, phase: str = PHASE_FINAL) -> ConfigRecord:
+        return ConfigRecord({
+            HP_LOCAL_EPOCHS: int(self.local_epochs),
+            HP_PENALTY: str(self.penalty),
+            HP_CLASS_WEIGHT: str(self.class_weight_cfg),
+            HP_LR_SCHEDULE: str(self.sgd_learning_rate),
+            HP_ETA0: float(self.sgd_eta0_cfg),
+            PHASE_PARAM: phase,
+        })
 
     @staticmethod
     def from_config(cfg: ConfigRecord) -> "HParams":
