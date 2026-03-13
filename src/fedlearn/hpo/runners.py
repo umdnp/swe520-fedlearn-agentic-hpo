@@ -191,8 +191,9 @@ class AgenticHPORunner:
         rc = context.run_config
         model = str(rc.get("agent-model", "gpt-5.2"))
         temperature = float(rc.get("agent-temperature", 0.2))
+        total_rounds = int(rc.get("num-server-rounds", 20))
 
-        controller = AgenticHPOController(model=model, temperature=temperature)
+        controller = AgenticHPOController(model=model, temperature=temperature, total_rounds=total_rounds)
 
         strategy = AgenticFedAvg(
             seed_hp=seed_hp,

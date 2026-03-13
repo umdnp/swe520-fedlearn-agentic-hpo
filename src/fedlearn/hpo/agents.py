@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -62,6 +63,7 @@ class AgenticHPOController:
     """
     model: str = "gpt-5.2"
     temperature: float = 0.2
+    total_rounds: int = 20
     max_history_rounds: int = 12
 
     _enabled: bool = field(init=False)
@@ -84,6 +86,8 @@ class AgenticHPOController:
                 "Each round, propose the next training hyperparameters. "
                 "You only see aggregated metrics and the history of prior choices. "
                 "Goal: maximize roc_auc while keeping loss low and training stable. "
+                "Do not overreact to one noisy round. Prefer consistency across multiple rounds. "
+                "Prefer controlled changes. Early in training, exploration is acceptable, but later in training prefer small step changes and avoid changing multiple hyperparameters at once unless performance has clearly worsened for several rounds. "
                 "Obey the allowed ranges and categories exactly."
             ),
             model=self.model,
@@ -118,6 +122,68 @@ class AgenticHPOController:
             exploit=1 if int(p.exploit) == 1 else 0,
         )
 
+    @staticmethod
+    def _safe_float(x: Any) -> float | None:
+        return float(x) if isinstance(x, (int, float)) else None
+
+    def _build_history_summary(self, history: list[dict[str, Any]]) -> dict[str, Any]:
+        recent = history[-self.max_history_rounds:]
+
+        aucs: list[float] = []
+        losses: list[float] = []
+
+        for rec in recent:
+            metrics = rec.get("metrics", {})
+            auc = self._safe_float(metrics.get("roc_auc"))
+            loss = self._safe_float(metrics.get("loss"))
+
+            if auc is not None:
+                aucs.append(auc)
+            if loss is not None:
+                losses.append(loss)
+
+        def mean_last(values: list[float], n: int) -> float | None:
+            if len(values) < n:
+                return None
+            return sum(values[-n:]) / n
+
+        def delta_window(values: list[float], n: int) -> float | None:
+            if len(values) < n:
+                return None
+            window = values[-n:]
+            return window[-1] - window[0]
+
+        auc_last = aucs[-1] if aucs else None
+        loss_last = losses[-1] if losses else None
+
+        auc_mean_3 = mean_last(aucs, 3)
+        auc_mean_5 = mean_last(aucs, 5)
+        loss_mean_3 = mean_last(losses, 3)
+        loss_mean_5 = mean_last(losses, 5)
+
+        auc_delta_3 = delta_window(aucs, 3)
+        auc_delta_5 = delta_window(aucs, 5)
+        loss_delta_3 = delta_window(losses, 3)
+        loss_delta_5 = delta_window(losses, 5)
+
+        plateau = False
+        if auc_delta_5 is not None and abs(auc_delta_5) < 0.002:
+            plateau = True
+
+        return {
+            "auc_last": auc_last,
+            "loss_last": loss_last,
+            "auc_mean_3": auc_mean_3,
+            "auc_mean_5": auc_mean_5,
+            "loss_mean_3": loss_mean_3,
+            "loss_mean_5": loss_mean_5,
+            "auc_delta_3": auc_delta_3,
+            "auc_delta_5": auc_delta_5,
+            "loss_delta_3": loss_delta_3,
+            "loss_delta_5": loss_delta_5,
+            "plateau": plateau,
+        }
+
     def propose_next(
             self,
             *,
@@ -132,9 +198,33 @@ class AgenticHPOController:
             return base_hp
 
         recent = history[-self.max_history_rounds:]
+        summary = self._build_history_summary(history)
+        explore_phase = server_round <= math.ceil(0.25 * self.total_rounds)
+
+        if explore_phase:
+            rules = [
+                "Do not ignore local_epochs during exploration.",
+                "Early exploration of local training intensity is encouraged.",
+                "Consider changing local_epochs as well as learning-rate settings.",
+                "Explore local_epochs deliberately; prefer moderate values unless there is strong evidence to increase or decrease further.",
+                "You may explore larger changes than later rounds, but still change only one major hyperparameter at a time.",
+                "If metrics improve strongly, keep similar parameters for the next round.",
+            ]
+        else:
+            rules = [
+                "Prefer small changes unless metrics worsen or plateau.",
+                "Use history_summary more than any single round when deciding.",
+                "If roc_auc improves and loss decreases over multiple rounds, consider exploit=1 and keep similar params.",
+                "If roc_auc stalls or degrades for 2+ rounds, explore by changing one dimension at a time.",
+                "If plateau is true, prefer keeping the current parameters or making only a very small change.",
+                "Do not change more than one major hyperparameter at once.",
+                "Respect eta0 dependency and all category constraints.",
+            ]
+
         payload = {
             "objective": {"maximize": "roc_auc", "minimize": "loss"},
             "round": int(server_round),
+            "phase": "exploration" if explore_phase else "stabilization",
             "search_space": {
                 "local_epochs": [1, 10],
                 "penalty": ALLOWED_PENALTIES_LIST,
@@ -150,12 +240,8 @@ class AgenticHPOController:
                 "sgd_eta0_cfg": base_hp.sgd_eta0_cfg,
             },
             "history": recent,
-            "rules": [
-                "Prefer small changes unless metrics worsen or plateau.",
-                "If roc_auc improves and loss decreases, consider exploit=1 and keep similar params.",
-                "If roc_auc stalls or degrades for 2+ rounds, explore by changing one dimension at a time.",
-                "Respect eta0 dependency and all category constraints.",
-            ],
+            "history_summary": summary,
+            "rules": rules,
         }
 
         prompt = (
@@ -233,7 +319,7 @@ class AgenticFedAvg(FedAvg):
 
         if prev_metrics:
             prev_auc = prev_metrics.get("metrics", {}).get("roc_auc")
-            prev_loss = prev_metrics.get("loss")
+            prev_loss = prev_metrics.get("metrics", {}).get("loss")
 
         logger.info(
             "[agentic_hpo] round=%d exploit=%s prev_auc=%s prev_loss=%s hp={local_epochs=%d penalty=%s lr=%s eta0=%.6g}",
@@ -278,10 +364,6 @@ class AgenticFedAvg(FedAvg):
             },
             "metrics": {k: float(v) for k, v in metrics_dict.items() if isinstance(v, (int, float))},
         }
-
-        # capture loss key (if exists)
-        if "loss" in metrics_dict and isinstance(metrics_dict["loss"], (int, float)):
-            rec["loss"] = float(metrics_dict["loss"])
 
         self._history.append(rec)
         return mrec
