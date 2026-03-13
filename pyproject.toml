@@ -28,7 +28,7 @@ serverapp = "fedlearn.hpo.server_app:app"
 experiment = "baseline"
 
 # shared settings
-num-server-rounds = 3
+num-server-rounds = 20
 local-epochs = 3
 penalty = "l2"
 class-weight = "none"
@@ -49,7 +49,7 @@ hpo-direction = "maximize"  # "maximize" for roc_auc, "minimize" for loss
 agent-model = "gpt-5.2"
 agent-temperature = 0.2
 
-# convergence controls
+# TODO: convergence controls (future enhancement)
 detect-convergence = true
 terminate-on-convergence = true
 convergence-metric = "roc_auc"
