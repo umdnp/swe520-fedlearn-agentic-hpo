@@ -37,12 +37,17 @@ def main(grid: Grid, context: Context) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     experiment = str(context.run_config.get("experiment", "baseline"))
+    logger.info("Starting experiment=%s", experiment)
+
     factory = RUNNERS.get(experiment)
     if factory is None:
         raise ValueError(f"Unknown experiment {experiment!r}. Valid: {sorted(RUNNERS)}")
 
     runner = factory()
     result, model = runner.run(grid=grid, context=context)
+
+    if result.arrays is None:
+        raise RuntimeError("FL run completed without final arrays.")
 
     # get final global params and save model
     final_params = result.arrays.to_numpy_ndarrays()

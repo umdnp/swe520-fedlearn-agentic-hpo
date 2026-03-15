@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 from flwr.app import Context
 from flwr.common import ConfigRecord, Message, RecordDict
+
+# Constants
 
 HP_LOCAL_EPOCHS = "local-epochs"
 HP_PENALTY = "penalty"
@@ -11,9 +14,17 @@ HP_CLASS_WEIGHT = "class-weight"
 HP_LR_SCHEDULE = "sgd-learning-rate"
 HP_ETA0 = "sgd-eta0"
 
-PHASE_PARAM = "phase"
-PHASE_HPO_TRIAL = "hpo-trial"
-PHASE_FINAL = "final"
+TRAIN_SPLIT = "train_split"
+EVAL_SPLIT = "eval_split"
+
+CONFIG_KEY = "config"
+
+
+class DataSplit(str, Enum):
+    TRAIN = "train"
+    VALIDATION = "validation"
+    TEST = "test"
+    TRAIN_VAL = "train_val"
 
 
 @dataclass(frozen=True)
@@ -30,16 +41,23 @@ class HParams:
 
     @property
     def sgd_eta0(self) -> float:
-        return self.sgd_eta0_cfg if self.sgd_learning_rate in ("constant", "adaptive") else 0.0
+        if self.sgd_learning_rate in ("constant", "adaptive"):
+            return self.sgd_eta0_cfg
+        return 0.0
 
-    def to_config(self, phase: str = PHASE_FINAL) -> ConfigRecord:
+    def to_config(
+            self,
+            train_split: DataSplit = DataSplit.TRAIN,
+            eval_split: DataSplit = DataSplit.VALIDATION,
+    ) -> ConfigRecord:
         return ConfigRecord({
             HP_LOCAL_EPOCHS: int(self.local_epochs),
             HP_PENALTY: str(self.penalty),
             HP_CLASS_WEIGHT: str(self.class_weight_cfg),
             HP_LR_SCHEDULE: str(self.sgd_learning_rate),
             HP_ETA0: float(self.sgd_eta0_cfg),
-            PHASE_PARAM: phase,
+            TRAIN_SPLIT: train_split.value,
+            EVAL_SPLIT: eval_split.value,
         })
 
     @staticmethod
@@ -59,11 +77,12 @@ class HParams:
     @staticmethod
     def from_message(message: Message, context: Context) -> "HParams":
         rd: RecordDict = message.content
-        cfg: ConfigRecord | None = rd.get("config")
+        cfg: ConfigRecord | None = rd.get(CONFIG_KEY)
         if cfg is None:
             return HParams.from_run_config(context)
 
         merged = dict(context.run_config)
+
         for k, v in cfg.items():
             merged[k] = v
 

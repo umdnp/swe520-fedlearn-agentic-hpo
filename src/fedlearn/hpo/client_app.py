@@ -8,7 +8,7 @@ from flwr.clientapp import ClientApp
 from flwr.common import ArrayRecord, Message, MetricRecord, RecordDict
 from sklearn.pipeline import Pipeline
 
-from fedlearn.common.config import HParams, PHASE_FINAL, PHASE_PARAM, PHASE_HPO_TRIAL
+from fedlearn.common.config import DataSplit, HParams, CONFIG_KEY, TRAIN_SPLIT, EVAL_SPLIT
 from fedlearn.common.data_split import CLIENT_KEYS, get_client_train_val_test_by_key
 from fedlearn.common.metrics import compute_binary_metrics
 from fedlearn.common.model import get_model, get_model_params, set_model_params
@@ -23,20 +23,49 @@ def _get_client_key(context: Context) -> str:
     Map Flower's partition-id to our logical client bucket name.
     """
     partition_id = int(context.node_config["partition-id"])
+
     try:
         return CLIENT_KEYS[partition_id]
-    except IndexError:
+    except IndexError as ex:
         raise ValueError(
             f"partition-id={partition_id} out of range for CLIENT_KEYS={CLIENT_KEYS}"
-        )
+        ) from ex
 
 
-def _get_phase(message: Message, context: Context) -> str:
-    cfg = message.content.get("config")
-    if cfg is not None and PHASE_PARAM in cfg:
-        return str(cfg[PHASE_PARAM])
+def _get_cfg_value(message: Message, context: Context, key: str, default: str) -> str:
+    """
+    Read a config value from the incoming message or fallback to run_config.
+    """
+    cfg = message.content.get(CONFIG_KEY)
 
-    return str(context.run_config.get(PHASE_PARAM, PHASE_FINAL))
+    if cfg is not None and key in cfg:
+        return str(cfg[key])
+
+    return str(context.run_config.get(key, default))
+
+
+def _get_train_split(message: Message, context: Context) -> DataSplit:
+    """
+    Determine which dataset split should be used for training.
+    """
+    value = _get_cfg_value(message, context, TRAIN_SPLIT, DataSplit.TRAIN.value)
+
+    try:
+        return DataSplit(value)
+    except ValueError as ex:
+        raise ValueError(f"Unknown train split: {value!r}") from ex
+
+
+def _get_eval_split(message: Message, context: Context) -> DataSplit:
+    """
+    Determine which dataset split should be used for evaluation.
+    """
+    value = _get_cfg_value(message, context, EVAL_SPLIT, DataSplit.TEST.value)
+
+    try:
+        return DataSplit(value)
+    except ValueError as ex:
+        raise ValueError(f"Unknown eval split: {value!r}") from ex
 
 
 def _init_model(message: Message, context: Context, hp: HParams | None = None) -> Pipeline:
@@ -57,28 +86,27 @@ def _init_model(message: Message, context: Context, hp: HParams | None = None) -
 @app.train()
 def train(message: Message, context: Context) -> Message:
     """
-    Perform one round of local training for this client.
+    Perform one round of local training.
 
-    Depending on phase:
-      - hpo-trial: fit on local train split
-      - final: fit on local train + val splits
+    TRAIN_SPLIT determines which dataset is used:
+    - TRAIN: fit on local train split
+    - TRAIN_VAL: fit on local train + validation splits
     """
-    # load this client's local train/val/test splits
     client_key = _get_client_key(context)
     X_train, y_train, X_val, y_val, _, _ = get_client_train_val_test_by_key(client_key)
 
-    phase = _get_phase(message, context)
+    train_split = _get_train_split(message, context)
 
-    if phase == PHASE_HPO_TRIAL:
+    if train_split == DataSplit.TRAIN:
         X_fit, y_fit = X_train, y_train
-    elif phase == PHASE_FINAL:
+    elif train_split == DataSplit.TRAIN_VAL:
         X_fit = pd.concat([X_train, X_val], axis=0, ignore_index=True)
         y_fit = pd.concat([y_train, y_val], axis=0, ignore_index=True)
     else:
-        raise ValueError(f"Unknown data phase: {phase!r}")
+        raise ValueError(f"Unsupported training split for train(): {train_split!r}")
 
     hp = HParams.from_message(message, context)
-    logger.info("[Client] Hyperparams this round: %s, phase=%s", hp, phase)
+    logger.info("[Client] Hyperparams this round: %s, train_split=%s", hp, train_split.value)
 
     model = _init_model(message, context, hp)
     pre = model.named_steps["preprocessor"]
@@ -88,7 +116,7 @@ def train(message: Message, context: Context) -> Message:
     X_proc = pre.transform(X_fit)
     clf.fit(X_proc, y_fit)  # uses max_iter=local_epochs
 
-    # compute metrics on the local fit split
+    # compute metrics on the local fit dataset
     metrics_dict = compute_binary_metrics(model, X_fit, y_fit)
     metrics_dict["num-examples"] = float(len(X_fit))
 
@@ -103,28 +131,27 @@ def train(message: Message, context: Context) -> Message:
 @app.evaluate()
 def evaluate(message: Message, context: Context) -> Message:
     """
-    Local evaluation using current global parameters.
+    Perform local evaluation.
 
-    Depending on phase:
-      - hpo-trial: evaluate on local val split
-      - final: evaluate on local test split
+    EVAL_SPLIT determines which dataset is used:
+    - VALIDATION: evaluate on local validation split
+    - TEST: evaluate on local test split
     """
-    # load this client's local train/val/test splits
     client_key = _get_client_key(context)
     _, _, X_val, y_val, X_test, y_test = get_client_train_val_test_by_key(client_key)
 
-    phase = _get_phase(message, context)
+    eval_split = _get_eval_split(message, context)
 
-    if phase == PHASE_HPO_TRIAL:
+    if eval_split == DataSplit.VALIDATION:
         X_eval, y_eval = X_val, y_val
-    elif phase == PHASE_FINAL:
+    elif eval_split == DataSplit.TEST:
         X_eval, y_eval = X_test, y_test
     else:
-        raise ValueError(f"Unknown data phase: {phase!r}")
+        raise ValueError(f"Unsupported evaluation split for evaluate(): {eval_split!r}")
 
     model = _init_model(message, context)
 
-    # compute metrics on the phase-appropriate evaluation split
+    # compute metrics on the evaluation split
     metrics_dict = compute_binary_metrics(model, X_eval, y_eval)
     metrics_dict["num-examples"] = float(len(X_eval))
 

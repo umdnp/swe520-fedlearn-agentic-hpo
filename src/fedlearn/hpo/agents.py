@@ -17,7 +17,7 @@ from flwr.serverapp.strategy import FedAvg
 from openai import OpenAIError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from fedlearn.common.config import HParams
+from fedlearn.common.config import DataSplit, HParams
 from fedlearn.common.metrics import metricrecord_to_dict
 
 logger = logging.getLogger(__name__)
@@ -54,22 +54,19 @@ class AgenticHPOProposal(BaseModel):
     local_epochs: int = Field(ge=1, le=10)
     penalty: Penalty
     sgd_learning_rate: Schedule
-    # eta0 is conditionally constrained; allow 0.0 so "optimal" can force it to 0.0.
-    sgd_eta0: float = Field(ge=0.0, le=1e-1)
+    sgd_eta0: float = Field(ge=0.0, le=2e-2)
     exploit: Literal[0, 1]
 
     @model_validator(mode="after")
     def validate_eta0(self) -> "AgenticHPOProposal":
-        """Enforce eta0 dependency on learning-rate schedule."""
         if self.sgd_learning_rate == "optimal":
             self.sgd_eta0 = 0.0
-        else:
-            if not (1e-4 <= self.sgd_eta0 <= 1e-1):
-                raise ValueError("sgd_eta0 must be in [1e-4, 1e-1] for constant/adaptive.")
+        elif not (1e-4 <= self.sgd_eta0 <= 2e-2):
+            raise ValueError("sgd_eta0 must be in [1e-4, 2e-2] for constant/adaptive.")
         return self
 
 
-@dataclass
+@dataclass(slots=True)
 class AgenticHPOController:
     """
     LLM-based controller that proposes next-round HParams from aggregated history.
@@ -86,22 +83,23 @@ class AgenticHPOController:
     def __post_init__(self) -> None:
         # if no key configured, allow FL to run (seed-only behavior)
         self._enabled = bool(os.environ.get("OPENAI_API_KEY", "").strip())
-        if self._enabled:
-            logger.info("Agent enabled (OPENAI_API_KEY found)")
-        else:
+
+        if not self._enabled:
             logger.warning("Agent disabled (OPENAI_API_KEY missing); using base_hp only")
             return
+
+        logger.info("Agent enabled (OPENAI_API_KEY found)")
 
         self._agent = Agent(
             name="Federated HPO controller",
             instructions=(
                 "You are an expert federated learning hyperparameter controller. "
                 "Each round, propose the next training hyperparameters. "
-                "You only see aggregated metrics and the history of prior choices. "
+                "You only see aggregated metrics and prior choices. "
                 "Goal: maximize roc_auc while keeping loss low and training stable. "
-                "Do not overreact to one noisy round. Prefer consistency across multiple rounds. "
-                "Prefer controlled changes. Early in training, exploration is acceptable, but later in training prefer small step changes and avoid changing multiple hyperparameters at once unless performance has clearly worsened for several rounds. "
-                "Obey the allowed ranges and categories exactly."
+                "Do not overreact to one noisy round. "
+                "Early rounds may explore more. Later rounds should prefer smaller, conservative changes. "
+                "Avoid changing multiple major hyperparameters at once unless performance has clearly worsened."
             ),
             model=self.model,
             model_settings=ModelSettings(temperature=self.temperature),
@@ -109,9 +107,6 @@ class AgenticHPOController:
         )
 
     def get_exploit(self, server_round: int) -> int | None:
-        """
-        Return exploit flag for a round if available.
-        """
         return self._exploit_by_round.get(int(server_round))
 
     @staticmethod
@@ -129,33 +124,19 @@ class AgenticHPOController:
             if loss is not None:
                 losses.append(loss)
 
-        auc_last = aucs[-1] if aucs else None
-        loss_last = losses[-1] if losses else None
-
-        auc_mean_3 = _mean_last(aucs, 3)
-        auc_mean_5 = _mean_last(aucs, 5)
-        loss_mean_3 = _mean_last(losses, 3)
-        loss_mean_5 = _mean_last(losses, 5)
-
-        auc_delta_3 = _delta_window(aucs, 3)
         auc_delta_5 = _delta_window(aucs, 5)
-        loss_delta_3 = _delta_window(losses, 3)
         loss_delta_5 = _delta_window(losses, 5)
 
-        plateau = auc_delta_5 is not None and abs(auc_delta_5) < 0.002
-
         return {
-            "auc_last": auc_last,
-            "loss_last": loss_last,
-            "auc_mean_3": auc_mean_3,
-            "auc_mean_5": auc_mean_5,
-            "loss_mean_3": loss_mean_3,
-            "loss_mean_5": loss_mean_5,
-            "auc_delta_3": auc_delta_3,
+            "auc_last": aucs[-1] if aucs else None,
+            "loss_last": losses[-1] if losses else None,
+            "auc_mean_3": _mean_last(aucs, 3),
+            "auc_mean_5": _mean_last(aucs, 5),
+            "loss_mean_3": _mean_last(losses, 3),
+            "loss_mean_5": _mean_last(losses, 5),
             "auc_delta_5": auc_delta_5,
-            "loss_delta_3": loss_delta_3,
             "loss_delta_5": loss_delta_5,
-            "plateau": plateau,
+            "plateau": auc_delta_5 is not None and abs(auc_delta_5) < 0.002,
         }
 
     def propose_next(
@@ -175,25 +156,22 @@ class AgenticHPOController:
         summary = self._build_history_summary(recent)
         explore_phase = server_round <= math.ceil(0.25 * self.total_rounds)
 
-        if explore_phase:
-            rules = [
-                "Do not ignore local_epochs during exploration.",
-                "Early exploration of local training intensity is encouraged.",
+        rules = (
+            [
+                "Exploration phase: moderate experimentation is allowed.",
                 "Consider changing local_epochs as well as learning-rate settings.",
-                "Explore local_epochs deliberately; prefer moderate values unless there is strong evidence to increase or decrease further.",
-                "You may explore larger changes than later rounds, but still change only one major hyperparameter at a time.",
-                "If metrics improve strongly, keep similar parameters for the next round.",
+                "Still avoid changing multiple major hyperparameters at once.",
+                "If metrics improve strongly, keep similar parameters next round.",
             ]
-        else:
-            rules = [
-                "Prefer small changes unless metrics worsen or plateau.",
-                "Use history_summary more than any single round when deciding.",
-                "If roc_auc improves and loss decreases over multiple rounds, consider exploit=1 and keep similar params.",
-                "If roc_auc stalls or degrades for 2+ rounds, explore by changing one dimension at a time.",
-                "If plateau is true, prefer keeping the current parameters or making only a very small change.",
-                "Do not change more than one major hyperparameter at once.",
-                "Respect eta0 dependency and all category constraints.",
+            if explore_phase
+            else [
+                "Stabilization phase: prefer small changes.",
+                "Use history_summary more than any single round.",
+                "If roc_auc improves and loss decreases across multiple rounds, keep similar parameters.",
+                "If metrics stall or worsen for multiple rounds, change one dimension at a time.",
+                "If plateau is true, keep parameters or make only a very small change.",
             ]
+        )
 
         payload = {
             "objective": {"maximize": "roc_auc", "minimize": "loss"},
@@ -203,7 +181,7 @@ class AgenticHPOController:
                 "local_epochs": [1, 10],
                 "penalty": ALLOWED_PENALTIES,
                 "sgd_learning_rate": ALLOWED_SCHEDULES,
-                "sgd_eta0": "if constant/adaptive: [1e-4, 1e-1]; if optimal: 0.0",
+                "sgd_eta0": "if constant/adaptive: [1e-4, 2e-2]; if optimal: 0.0",
                 "exploit": [0, 1],
             },
             "base_hp": {
@@ -227,6 +205,7 @@ class AgenticHPOController:
         try:
             result = Runner.run_sync(self._agent, prompt)
             proposal = result.final_output
+
             if not isinstance(proposal, AgenticHPOProposal):
                 raise TypeError(f"Unexpected output type: {type(proposal)}")
 
@@ -262,17 +241,21 @@ class AgenticFedAvg(FedAvg):
 
     def _base_hp_for_round(self, server_round: int) -> HParams:
         """
-        Use previous round hp as baseline to encourage stability.
+        Use previous round hp as the baseline to encourage stability.
         """
         if server_round <= 1:
             return self.seed_hp
         return self._hp_by_round.get(server_round - 1, self.seed_hp)
 
     def configure_train(
-            self, server_round: int, arrays: ArrayRecord, config: ConfigRecord, grid: Grid
+        self,
+        server_round: int,
+        arrays: ArrayRecord,
+        config: ConfigRecord,
+        grid: Grid,
     ) -> Iterable[Message]:
         """
-        Choose next-round hyperparameters and update the config.
+        Choose next-round hyperparameters and update the training config.
         """
         rnd = int(server_round)
 
@@ -302,7 +285,10 @@ class AgenticFedAvg(FedAvg):
             float(hp.sgd_eta0_cfg),
         )
 
-        hp_cfg = hp.to_config()
+        hp_cfg = hp.to_config(
+            train_split=DataSplit.TRAIN,
+            eval_split=DataSplit.VALIDATION,
+        )
 
         # merge into existing config (don’t clobber other keys)
         for k, v in hp_cfg.items():
@@ -310,7 +296,34 @@ class AgenticFedAvg(FedAvg):
 
         return super().configure_train(server_round, arrays, config, grid)
 
-    def aggregate_evaluate(self, server_round: int, replies: Iterable[Message]) -> MetricRecord | None:
+    def configure_evaluate(
+        self,
+        server_round: int,
+        arrays: ArrayRecord,
+        config: ConfigRecord,
+        grid: Grid,
+    ) -> Iterable[Message]:
+        """
+        Ensure evaluation uses the same per-round config as training.
+        """
+        rnd = int(server_round)
+        hp = self._hp_by_round.get(rnd, self.seed_hp)
+
+        hp_cfg = hp.to_config(
+            train_split=DataSplit.TRAIN,
+            eval_split=DataSplit.VALIDATION,
+        )
+
+        for k, v in hp_cfg.items():
+            config[k] = v
+
+        return super().configure_evaluate(server_round, arrays, config, grid)
+
+    def aggregate_evaluate(
+        self,
+        server_round: int,
+        replies: Iterable[Message],
+    ) -> MetricRecord | None:
         """
         Aggregate evaluation replies and record aggregated metrics for agent history.
         """

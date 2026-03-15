@@ -143,7 +143,11 @@ def get_client_train_val_test_by_key(client_key: str) -> tuple[
 
 def get_client_train_union() -> tuple[pd.DataFrame, pd.Series]:
     """
-    Union all client-local training splits into one shared training set (used for fitting shared preprocessor).
+    Union all client-local training splits into one shared training set.
+
+    Used to fit a common preprocessor so categorical encodings and feature spaces remain consistent
+    across partitions. In a production federated setting, this would ideally be replaced by federated
+    data analysis or federated preprocessing.
     """
     X_parts: list[pd.DataFrame] = []
     y_parts: list[pd.Series] = []
