@@ -29,7 +29,7 @@ experiment = "baseline"
 
 # shared settings
 num-server-rounds = 20
-local-epochs = 3
+local-epochs = 5
 penalty = "l2"
 class-weight = "none"
 sgd-learning-rate = "optimal"
@@ -41,7 +41,7 @@ fraction-evaluate = 1.0
 
 # hpo controls
 hpo-n-trials = 15
-hpo-num-rounds = 2
+hpo-num-rounds = 5
 hpo-metric = "roc_auc"  # or "loss"
 hpo-direction = "maximize"  # "maximize" for roc_auc, "minimize" for loss
 
