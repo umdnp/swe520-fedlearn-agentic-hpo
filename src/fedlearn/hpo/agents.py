@@ -98,13 +98,13 @@ class AgenticHPOController:
                 "You only see aggregated metrics and prior choices. "
                 "Goal: maximize roc_auc while keeping loss low and training stable. "
                 "Do not overreact to one noisy round. "
-                "Early rounds may explore more. Later rounds should prefer smaller, conservative changes. "
-                "Treat changes to penalty and learning-rate schedule as major changes. "
+                "Early rounds may explore more; later rounds should prefer smaller, conservative changes. "
+                "Treat penalty and learning-rate schedule changes as major changes. "
                 "Prefer adjusting local_epochs or eta0 before changing penalty or schedule. "
                 "Use constant learning rate only when there is clear evidence that the current learning-rate approach is underperforming. "
-                "Avoid changing multiple major hyperparameters at once unless performance has clearly worsened for multiple rounds. "
                 "Set exploit=1 only when you are intentionally keeping or only slightly adjusting a configuration that appears to be working. "
                 "Set exploit=0 when you are testing a meaningfully different configuration. "
+                "If best_seen is provided, use it as an anchor in later rounds unless there is strong evidence to explore elsewhere. "
             ),
             model=self.model,
             model_settings=ModelSettings(temperature=self.temperature),
@@ -144,6 +144,16 @@ class AgenticHPOController:
             "plateau": auc_delta_5 is not None and abs(auc_delta_5) < 0.002,
         }
 
+    @staticmethod
+    def _best_seen(history: list[dict[str, Any]]) -> dict[str, Any] | None:
+        valid = [
+            rec for rec in history
+            if isinstance(rec.get("metrics", {}).get("roc_auc"), (int, float))
+        ]
+        if not valid:
+            return None
+        return max(valid, key=lambda rec: float(rec["metrics"]["roc_auc"]))
+
     def propose_next(
             self,
             *,
@@ -159,6 +169,7 @@ class AgenticHPOController:
 
         recent = history[-self.max_history_rounds:]
         summary = self._build_history_summary(recent)
+        best_seen = self._best_seen(history)
         explore_phase = server_round <= math.ceil(0.25 * self.total_rounds)
 
         rules = (
@@ -167,9 +178,8 @@ class AgenticHPOController:
                 "Prefer changing one dimension at a time.",
                 "Prefer adjusting local_epochs or eta0 before changing penalty or learning-rate schedule.",
                 "Treat penalty and learning-rate schedule changes as major changes.",
-                "Use constant learning rate only when there is clear evidence that the current schedule is underperforming.",
+                "Use constant learning rate only when there is clear evidence that the current learning-rate approach is underperforming.",
                 "If metrics improve strongly, keep similar parameters next round.",
-                "Use exploit=0 when testing a meaningfully different configuration.",
             ]
             if explore_phase
             else [
@@ -179,9 +189,9 @@ class AgenticHPOController:
                 "If metrics stall or worsen for multiple rounds, change only one dimension at a time.",
                 "Prefer adjusting local_epochs or eta0 before changing penalty or learning-rate schedule.",
                 "Treat penalty and learning-rate schedule changes as major changes.",
-                "Use constant learning rate only when there is clear evidence that the current schedule is underperforming.",
                 "If plateau is true, keep parameters or make only a very small change.",
-                "Use exploit=1 only when keeping or slightly adjusting a configuration that appears to be working.",
+                "If best_seen is available and recent rounds do not clearly outperform it, consider staying close to best_seen.hp.",
+                "After a failed exploratory move, prefer returning toward best_seen.hp rather than continuing to drift.",
             ]
         )
 
@@ -203,6 +213,16 @@ class AgenticHPOController:
                 "sgd_learning_rate": base_hp.sgd_learning_rate,
                 "sgd_eta0_cfg": base_hp.sgd_eta0_cfg,
             },
+            "best_seen": (
+                {
+                    "round": int(best_seen["round"]),
+                    "roc_auc": float(best_seen["metrics"]["roc_auc"]),
+                    "loss": float(best_seen["metrics"]["loss"]),
+                    "hp": best_seen["hp"],
+                }
+                if best_seen is not None
+                else None
+            ),
             "history": recent,
             "history_summary": summary,
             "rules": rules,
